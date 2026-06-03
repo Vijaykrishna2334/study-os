@@ -1,0 +1,340 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Topic {
+  id           String   @id @default(cuid())
+  phase        Int
+  code         String   @unique // e.g. P1_1_1
+  title        String
+  filePath     String
+  tier         String   @default("B") // A | B | C | D
+  order        Int      @default(0)
+  read         Boolean  @default(false)
+  rederived    Boolean  @default(false)
+  artifact     Boolean  @default(false)
+  taughtBack   Boolean  @default(false)
+  mocked       Boolean  @default(false)
+  confidence   Int      @default(0) // 0..5
+  notes        String   @default("")
+  quizPassed   Boolean  @default(false)
+  quizBestScore Int     @default(0) // 0..100
+  lastTouched  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  // XP & gamification
+  xpEarned     Int      @default(0)
+  // Spaced Repetition System
+  nextReview   DateTime?
+  reviewCount  Int      @default(0)
+  // Pomodoro — focused study minutes on this topic
+  studyMinutes Int      @default(0)
+  flashcards   Flashcard[]
+  enrichment   TopicEnrichment?
+}
+
+model Flashcard {
+  id        String   @id @default(cuid())
+  topicId   String
+  topic     Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  question  String
+  answer    String
+  easiness  Float    @default(2.5)
+  interval  Int      @default(0)
+  reps      Int      @default(0)
+  nextDue   DateTime @default(now())
+  createdAt DateTime @default(now())
+}
+
+model StudySession {
+  id        String   @id @default(cuid())
+  topicId   String?
+  startedAt DateTime @default(now())
+  endedAt   DateTime?
+  minutes   Int      @default(0)
+  kind      String   @default("study") // study | dsa | mock | review
+  notes     String   @default("")
+}
+
+// One row per topic, holds the Gemini-generated mastery path.
+model TopicEnrichment {
+  id              String   @id @default(cuid())
+  topicId         String   @unique
+  topic           Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  prereqCodes     String   @default("[]") // JSON array of topic codes you should master first
+  followCodes     String   @default("[]") // JSON array of topic codes that follow this
+  quiz            String   @default("[]") // JSON [{q, options[4], correctIndex, explain}]
+  problemSet      String   @default("[]") // JSON [{type, q, answer, hint}]
+  projectBrief    String   @default("")   // markdown
+  videoQuery      String   @default("")   // best YouTube search query
+  videoUrl        String   @default("")   // optional confirmed URL
+  mindMap         String   @default("")   // mermaid syntax
+  cheatSheet      String   @default("")   // 5-bullet cheat sheet (cached)
+  generatedAt     DateTime?
+  model           String   @default("")   // which Gemini model produced it
+}
+
+// Daily activity log for streak + heatmap.
+model StudyDay {
+  date       String   @id // YYYY-MM-DD
+  minutes    Int      @default(0)
+  topicsTouched Int   @default(0)
+  reads      Int      @default(0)
+  quizzes    Int      @default(0)
+  artifacts  Int      @default(0)
+  mocks      Int      @default(0)
+  updatedAt  DateTime @updatedAt
+}
+
+// Portfolio repo tracker (4 showcase repos from strategy doc).
+model PortfolioRepo {
+  id          String   @id @default(cuid())
+  slug        String   @unique // llm-rag | agents | cv | mlops
+  name        String
+  url         String
+  description String   @default("")
+  status      String   @default("planned") // planned | building | shipped
+  readme      String   @default("")
+  stars       Int      @default(0)
+  lastChecked DateTime?
+  createdAt   DateTime @default(now())
+}
+
+// Weekly Sunday review cache.
+model WeeklyReview {
+  id           String   @id @default(cuid())
+  weekStart    String   @unique // YYYY-MM-DD of the Monday
+  summary      String   @default("")
+  recommendations String @default("")
+  hoursStudied Int      @default(0)
+  topicsMastered Int    @default(0)
+  generatedAt  DateTime @default(now())
+}
+
+// Job-description matcher cache.
+model JDMatch {
+  id           String   @id @default(cuid())
+  jdHash       String   @unique
+  jdTitle      String   @default("")
+  jdText       String
+  fitScore     Int      @default(0) // 0..100
+  matchedCodes String   @default("[]") // topics you've mastered that match
+  gapCodes     String   @default("[]") // topics to study to close the gap
+  bullets      String   @default("[]") // resume bullets tailored to this JD
+  generatedAt  DateTime @default(now())
+}
+
+// OAuth-connected accounts (currently: Google Calendar).
+model ConnectedAccount {
+  id           String   @id @default(cuid())
+  provider     String   @unique // "google"
+  email        String   @default("")
+  accessToken  String   @default("")
+  refreshToken String   @default("")
+  expiresAt    DateTime?
+  scope        String   @default("")
+  calendarId   String   @default("primary") // which calendar to push events into
+  enabled      Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// Track which calendar events we created so we can update/delete them.
+model CalendarEvent {
+  id           String   @id @default(cuid())
+  externalId   String   @unique // Google's eventId
+  topicCode    String   @default("")
+  kind         String   @default("study") // study | dsa | behavioral | review
+  startsAt     DateTime
+  endsAt       DateTime
+  title        String
+  createdAt    DateTime @default(now())
+}
+
+// Web push subscription (one row per browser/device).
+model PushSubscription {
+  id        String   @id @default(cuid())
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  userAgent String   @default("")
+  createdAt DateTime @default(now())
+}
+
+// DSA grinder — track per-problem progress.
+model DSAAttempt {
+  id          String   @id @default(cuid())
+  problemSlug String
+  passed      Boolean  @default(false)
+  passedTests Int      @default(0)
+  totalTests  Int      @default(0)
+  code        String   @default("")
+  language    String   @default("python")
+  ms          Int      @default(0)
+  createdAt   DateTime @default(now())
+  @@index([problemSlug])
+}
+
+// Job application tracker — CRM-style pipeline.
+model Application {
+  id            String   @id @default(cuid())
+  company       String
+  role          String
+  source        String   @default("manual") // manual | applypilot | linkedin | referral
+  jdUrl         String   @default("")
+  jdText        String   @default("")
+  status        String   @default("applied") // applied | screen | technical | onsite | offer | rejected | withdrew
+  appliedAt     DateTime @default(now())
+  nextActionAt  DateTime?
+  nextAction    String   @default("")
+  salaryRange   String   @default("")
+  location      String   @default("")
+  remote        Boolean  @default(false)
+  notes         String   @default("")
+  fitScore      Int      @default(0)
+  resumeId      String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  @@index([status])
+  @@index([company])
+}
+
+// Saved resume versions.
+model Resume {
+  id           String   @id @default(cuid())
+  name         String   @default("Default")
+  targetRole   String   @default("AI/ML Engineer")
+  headerJSON   String   @default("{}")  // name, email, phone, links
+  summary      String   @default("")
+  bulletsJSON  String   @default("[]")  // selected bullets array
+  experienceJSON String @default("[]")  // experience entries
+  skillsJSON   String   @default("[]")
+  educationJSON String  @default("[]")
+  projectsJSON String   @default("[]")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// Company research cache (Gemini-generated).
+model CompanyResearch {
+  id              String   @id @default(cuid())
+  slug            String   @unique // normalised company name
+  name            String
+  overview        String   @default("")
+  productsJSON    String   @default("[]")
+  leadershipJSON  String   @default("[]")
+  recentNews      String   @default("")
+  interviewProcess String  @default("")
+  commonQuestions String   @default("")  // JSON array of strings
+  cultureNotes    String   @default("")
+  techStack       String   @default("")
+  generatedAt     DateTime @default(now())
+}
+
+// Interview Loop Planner — generated 3-day prep plan for an upcoming interview.
+model InterviewPrep {
+  id            String   @id @default(cuid())
+  company       String
+  role          String
+  interviewDate DateTime
+  roundType     String   @default("technical") // phone | technical | onsite | behavioral | system_design
+  plan          String   @default("")           // Gemini-generated markdown plan
+  tasksJSON     String   @default("[]")         // [{id, day, task, done}]
+  notes         String   @default("")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  @@index([interviewDate])
+}
+
+// Cover Letter library — generated + manually-edited letters per application.
+model CoverLetter {
+  id        String   @id @default(cuid())
+  company   String
+  role      String
+  jdText    String   @default("")
+  hook      String   @default("")
+  body      String
+  tone      String   @default("professional")    // professional | enthusiastic | concise
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Paper Reader — saved papers with summaries.
+model SavedPaper {
+  id          String   @id @default(cuid())
+  arxivId     String   @unique
+  title       String
+  authors     String   @default("")
+  abstract    String   @default("")
+  summary     String   @default("")
+  topicCode   String   @default("")
+  savedAt     DateTime @default(now())
+}
+
+// User preferences (single-row table).
+model UserSettings {
+  id                    String   @id @default("singleton")
+  notifyEnabled         Boolean  @default(false)
+  notifyHour            Int      @default(9)  // 0..23 local time
+  notifyMinute          Int      @default(0)
+  notifyMessage         String   @default("Daily study queue is ready. Open Today.")
+  calendarSyncEnabled   Boolean  @default(false)
+  studyStartHour        Int      @default(9)
+  studyDurationHours    Int      @default(3)
+  dsaStartHour          Int      @default(14)
+  behavioralStartHour   Int      @default(19)
+  timezone              String   @default("Asia/Kolkata")
+  creditsJSON           String   @default("[]") // JSON array of GcpCredit objects
+  // Gamification
+  totalXP               Int      @default(0)
+  dailyGoal             Int      @default(3)  // topics per day target
+  updatedAt             DateTime @updatedAt
+}
+
+// Interview Study Calendar — day-by-day plan to crack a specific JD
+model InterviewPlan {
+  id             String   @id @default(cuid())
+  jdTitle        String   @default("")
+  jdText         String
+  interviewDate  DateTime
+  topicsJSON     String   @default("[]")  // ordered topic IDs to study
+  scheduleJSON   String   @default("{}")  // { "YYYY-MM-DD": ["topicId1", ...] }
+  completedDays  String   @default("[]")  // ["YYYY-MM-DD", ...]
+  maxPerDay      Int      @default(4)
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+// Freelance Gig Tracker
+model FreelanceGig {
+  id          String   @id @default(cuid())
+  platform    String   @default("Upwork") // Upwork | Fiverr | Internshala | LinkedIn | Topmate | Other
+  title       String
+  client      String   @default("")
+  status      String   @default("proposal") // proposal | active | completed | rejected
+  amountINR   Int      @default(0)   // expected or earned amount in INR
+  description String   @default("")
+  notes       String   @default("")
+  submittedAt DateTime @default(now())
+  completedAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  @@index([status])
+  @@index([platform])
+}
+
+// Daily Activity Log — track non-study goals per day
+model DailyLog {
+  date           String  @id // YYYY-MM-DD
+  jobsApplied    Int     @default(0)
+  linkedinPosts  Int     @default(0)
+  freelanceProposals Int @default(0)
+  topicsStudied  Int     @default(0)
+  updatedAt      DateTime @updatedAt
+}
